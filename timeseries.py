@@ -9,20 +9,11 @@ import matplotlib.pyplot as plt
 import sys
 import pandas as pd
 import numpy as np
+import sklearn as sk 
+import pickle
 
-# Dummy data 
-def create_data (): 
-	data = [1] * 10 + [2] * 10 + [3] * 10 + [4] * 10 + [5] * 10 
-	data *= 10
-
-	# Put this timeseries into a supervised dataset, where the target for each sample is the next sample
-	ds = SequentialDataSet(1, 1)
-	for sample, next_sample in zip(data, cycle(data[1:])):
-	    ds.addSample(sample, next_sample)
-
-	print("Done data preparation...")
-
-	return ds 
+close_max = 0
+open_max = 0
 
 def train (ds, net):
 	# Train the network 
@@ -35,22 +26,26 @@ def train (ds, net):
 	    trainer.trainEpochs(EPOCHS_PER_CYCLE)
 	    error = trainer.testOnData()
 	    train_errors.append(error)
-	    print (error)
 	    epoch = (i+1) * EPOCHS_PER_CYCLE
 	    print("\r epoch {}/{}".format(epoch, EPOCHS))
 	    stdout.flush()
 
-	print()
-	print("final error =", train_errors[-1])
+	# print("final error =", train_errors[-1])
 
 	return train_errors, EPOCHS, EPOCHS_PER_CYCLE
 
-def predict (ds, net):
+def predict (ds, net, date):
+	i = 0 
+	filename = "Result.csv"
+	f = open(filename, 'w')
+	f.write('Date, Opening price, Predicted closing price, Actual closing price \n')
 	for sample, target in ds.getSequenceIterator(0):
-	    print("               sample = %4.1f" % sample)
-	    print("predicted next sample = %4.1f" % net.activate(sample))
-	    print("   actual next sample = %4.1f" % target)
-	    print()
+		s = '{0},{1},{2}, {3}\n'.format(date[i], (sample * open_max), (net.activate(sample)* close_max), (target * close_max))
+		print (s)
+		f.write(s)
+		i += 1
+	print ("Created " + filename)
+	f.close()
 
 def plot (train_errors, EPOCHS, EPOCHS_PER_CYCLE):
 	plt.plot(range(0, EPOCHS, EPOCHS_PER_CYCLE), train_errors)
@@ -58,39 +53,76 @@ def plot (train_errors, EPOCHS, EPOCHS_PER_CYCLE):
 	plt.ylabel('error')
 	plt.show()
 
-def create_trade_data (data):
+def create_train_set (open_price, close_price):
+	global open_max
+	global close_max 
 	ds = SequentialDataSet(1, 1)
-	for sample, next_sample in zip(data, cycle(data[1:])):
-	 	ds.addSample(sample, next_sample)	
+	open_data = normalize (open_price) 
+	close_data = normalize (close_price) 
+	open_max = open_data[1]
+	close_max = close_data[1]
+	open_price = open_data[0]
+	close_price = close_data[0]
+
+	size = len (open_price)
+	for i in range(0, size):
+		ds.addSample(open_price[i], close_price[i])	
 
 	return ds 
 
+def calculate_mse (ds, net):
+	diff_list = []
+	for sample, target in ds.getSequenceIterator(0):
+		squared_diff = np.square((net.activate(sample) * close_max - target * close_max))
+		diff_list.append(squared_diff)
 
+	mse = float(sum (diff_list)) / float(len (diff_list))
+
+	print ("The mean squared error is ", mse)
+	return mse
+
+def normalize (data):
+	maxnum = max (data)
+	normData = data / maxnum
+	return (normData, maxnum)
+
+
+def save_model (net):
+	filename = "model.pkl"
+	fileObject = open(filename, 'w')
+	pickle.dump(net, fileObject)
+	fileObject.close()
 
 if __name__ == "__main__":
-	# Create dummy data 
-	# ds = create_data()
-
 	# Load data 
 	arg = sys.argv
 	filename = arg[1]
-	df = pd.read_csv(filename)
-	data = df["Open"]
-	ds = create_trade_data (data)
-	print (ds) 
+	filedir = "./data/" + filename
+	df = pd.read_csv(filedir)
+	open_price = df["Open"]
+	close_price = df["Close"]
+	date = df["Date"]
+	ds = create_train_set (open_price, close_price)
 
+	print("Building network...")
 	# Build a simple LSTM network with 1 input node, 5 LSTM cells and 1 output node
 	net = buildNetwork(1, 5, 1, hiddenclass=LSTMLayer, outputbias=False, recurrent=True)
 
 	# Train the model
+	print("Start training...")
 	train_errors, EPOCHS, EPOCHS_PER_CYCLE = train (ds, net)
 
-	print("Done training. Plotting error")
+	print("Done training. Plotting error...")
 	plot (train_errors, EPOCHS, EPOCHS_PER_CYCLE)
 
-	# print("Predict next sample")
-	# predict (ds, net)
-	# print (np.mean(ds["target"]))
+	print("Predicting price...")
+	predict(ds, net, date)
+
+	print("Calculating mean squared error...")
+	calculate_mse (ds, net)
+
+	print("Saving model...")
+	save_model(net)
 
 
 
